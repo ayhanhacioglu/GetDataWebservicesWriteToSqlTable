@@ -1,0 +1,115 @@
+USE [DATABASE]
+GO
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+CREATE PROCEDURE [dbo].[GetB2BSalesReportFromXCorpSalesPortal]
+AS
+/***********************************************************************************************************************************************/
+/*                                                                                                                                             */
+/* Please be sure first of all to activate this feature on your SQL Server                                                                     */
+/* ----------------------------                                                                                                                */
+/* sp_configure 'show advanced options', 1                                                                                                     */
+/* GO                                                                                                                                          */
+/* RECONFIGURE                                                                                                                                 */
+/* GO                                                                                                                                          */
+/* sp_configure 'Ole Automation Procedures', 1                                                                                                 */
+/* GO                                                                                                                                          */
+/* RECONFIGURE                                                                                                                                 */
+/* GO                                                                                                                                          */
+/* ----------------------------                                                                                                                */
+/* This procedure is calling from XCorp B2B Report Webservices api                                                                             */
+/* You must be sure all informations of data source from webservices details and you must be sure the accessability to webservices links       */
+/* You must create a table on your database with such as end of the this procedure with JSON data type. It must name is XCorpB2BSalesReport.   */
+/*                                                                                                                                             */
+/* History:                                                                                                                                    */
+/* Version Date Person Description                                                                                                             */
+/* 1.0     08/08/2023  AH Started                                                                                                              */
+/*                                                                                                                                             */
+/* Comments:                                                                                                                                   */
+/*                                                                                                                                             */
+/* https://learn.microsoft.com/en-us/sql/relational-databases/json/json-data-sql-server?view=sql-server-ver16                                  */
+/* https://learn.microsoft.com/en-us/sql/relational-databases/json/format-query-results-as-json-with-for-json-sql-server?view=sql-server-ver16 */
+/*                                                                                                                                             */
+/*                                                                                                                                             */
+/* Aliases:                                                                                                                                    */
+/* AH : Ayhan HACIOGLU ayhanhacioglu@gmail.com                                                                                                 */
+/***********************************************************************************************************************************************/
+
+BEGIN
+SET TEXTSIZE -1 /* Please do not delete, this is must for runnable SQL Job */
+DECLARE
+@Object INT,
+@AuthHeader VARCHAR(8000),
+@ContentType VARCHAR(8000),
+@TokenResponseText VARCHAR(MAX),
+@PageResponseData VARCHAR(MAX),
+@Body VARCHAR(8000),
+@JsonExtractedTokenResult VARCHAR(MAX),
+@JsonExtractedPageResult NVARCHAR(MAX),
+@Token VARCHAR(8000),
+@SQLPageData NVARCHAR(MAX)
+
+DECLARE @JsonToken TABLE(response VARCHAR(8000))
+DECLARE @JsonPageData TABLE(response NVARCHAR(MAX))
+DECLARE @xCorpB2BSalesReport_JSON TABLE(response NVARCHAR(MAX))
+DECLARE @JsonPageDataResult NVARCHAR(MAX)
+
+SET @ContentType = 'application/json'
+SET @Body = '{"username":"please write here your webservice username","password":"please write here your webservice password"}'
+
+/* POST Method */
+
+EXEC sp_OACreate 'MSXML2.XMLHTTP', @Object OUT
+EXEC @TokenResponseText = sp_OAMethod @Object, 'OPEN', NULL, 'Post', 'https://api.xCorp.com/rest/b2b/api/v1/auth/login/','FALSE'
+SELECT @TokenResponseText
+EXEC sp_OAMethod @Object, 'setRequestHeader', NULL, 'Content-type', @ContentType
+EXEC sp_OAMethod @Object, 'SEND', NULL, @Body
+EXEC sp_OAMethod @Object, 'responseText', @JsonToken OUTPUT
+
+INSERT INTO @JsonToken (response) EXEC sp_OAGetProperty @Object, 'responseText'
+SET @JsonExtractedTokenResult = (SELECT * FROM @JsonToken)
+SET @Token = (SELECT [value] FROM OPENJSON(@JsonExtractedTokenResult) WHERE [key] = 'token') /* we need only token data for the GET or other methods */
+EXEC sp_OADestroy @Object
+
+/* GET Method */
+
+TRUNCATE TABLE XCorpB2BSalesReport
+
+EXEC sp_OACreate 'MSXML2.XMLHTTP', @Object OUT
+EXEC @PageResponseData = sp_OAMethod @Object, 'OPEN', NULL, 'Get', 'https://api.xCorp.com/rest/b2b/api/v1/report/get-stock/?pageno=1','FALSE'
+SELECT @PageResponseData
+EXEC sp_OAMethod @Object, 'setRequestHeader', NULL, 'Authorization', @Token
+EXEC sp_OAMethod @Object, 'SEND', NULL, NULL
+EXEC sp_OAMethod @Object, 'responseText', @JsonPageData OUTPUT
+
+INSERT INTO @JsonPageData (response) EXEC sp_OAGetProperty @Object, 'responseText'
+SET @JsonPageDataResult = (SELECT * FROM @JsonPageData)
+SET @JsonExtractedPageResult = (SELECT [value] FROM OPENJSON(@JsonPageDataResult) WHERE [key] = 'data') /* If webservices returns so many JSON result you must be deep analyse with POSTMAN tool. You can find useful data tags easly. */
+--SELECT * FROM @JsonPageData /* Maybe you need debug level */
+INSERT INTO xCorpB2BSalesReport
+SELECT A.* FROM OPENJSON(@JsonExtractedPageResult,'$')
+WITH (
+	     WAREHOUSE_TYPE NVARCHAR(MAX) '$.WAREHOUSE_TYPE'
+      ,SELLER_ID NVARCHAR(MAX) '$.SELLER_ID'
+      ,SELLER_NAME NVARCHAR(MAX) '$.SELLER_NAME'
+      ,PRODUCT_ID NVARCHAR(MAX) '$.PRODUCT_ID'
+      ,SELLER_PRODUCT_ID NVARCHAR(MAX) '$.SELLER_PRODUCT_ID'
+      ,PRODUCT_SELLER_NAME NVARCHAR(MAX) '$.PRODUCT_SELLER_NAME'
+      ,BUYER_PRODUCT_CODE NVARCHAR(MAX) '$.BUYER_PRODUCT_CODE'
+      ,BARCODE NVARCHAR(MAX) '$.BARCODE'
+      ,DELIVERY_POINT_ID NVARCHAR(MAX) '$.DELIVERY_POINT_ID'
+      ,DELIVERY_POINT_DESCRIPTION NVARCHAR(MAX) '$.DELIVERY_POINT_DESCRIPTION'
+      ,STATE_PROVINCE_ID NVARCHAR(MAX) '$.STATE_PROVINCE_ID'
+      ,STATE_PROVINCE_NAME NVARCHAR(MAX) '$.STATE_PROVINCE_NAME'
+      ,STOCK NVARCHAR(MAX) '$.STOCK'
+      ,STOCK_AMOUNT NVARCHAR(MAX) '$.STOCK_MOUNT'
+      ,DAILY_SALES NVARCHAR(MAX) '$.DAILY_SALES'
+      ,DAILY_SALES_AMOUNT NVARCHAR(MAX) '$.DAILY_SALES_AMOUNT'
+      ,DAILY_LOADING NVARCHAR(MAX) '$.DAILY_LOADING'
+      ,DAILY_LOADING_AMOUNT NVARCHAR(MAX) '$.DAILY_LOADING_AMOUNT'
+      ,STOCK_DAILY NVARCHAR(MAX) '$.STOCK_DAILY'
+	  ) AS A
+
+EXEC sp_OADestroy @Object
